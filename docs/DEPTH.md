@@ -15,6 +15,7 @@
 | M5 分区附加 | 看首重、续重、偏远、燃油、保价与应收 | POST /api/charges | `app/modules/m5_charges/handler.py` `app/modules/m5_charges/service.py` `app/modules/m5_charges/zone.py` `app/modules/m5_charges/addon.py` `app/modules/m5_charges/money.py` | `tests/test_m5_charges.py` |
 | M6 账单对账 | 看四账是否相等，差在哪一项 | GET /api/reconcile | `app/modules/m6_reconcile/handler.py` `app/modules/m6_reconcile/service.py` `app/modules/m6_reconcile/compare.py` `app/modules/m6_reconcile/totals.py` `app/modules/m6_reconcile/explain.py` | `tests/test_m6_reconcile.py` |
 | M7 导出 | 导出账单、证据行与可复算的运行清单 | GET /api/export/invoice.csv | `app/modules/m7_export/handler.py` `app/modules/m7_export/service.py` `app/modules/m7_export/csv_out.py` `app/modules/m7_export/invoice_out.py` | `tests/test_m7_export.py` |
+| M8 承运商月结 | 控制数对逐票合计，看尾差归属，确认后导出月结单 | GET /api/settlement | `app/modules/m8_settlement/handler.py` `app/modules/m8_settlement/service.py` `app/modules/m8_settlement/tail.py` `app/modules/m8_settlement/period.py` `app/modules/m8_settlement/csv_out.py` | `tests/test_m8_settlement.py` |
 
 ## 陷阱登记
 
@@ -33,6 +34,9 @@
 | TRAP-24 | 各分项各自四舍五入 | 分项之和与应收差一分钱 | 分项先量化到分，应收由分项求和得出 | `app/modules/m5_charges/money.py` | `tests/test_m5_charges.py` |
 | TRAP-25 | 同分区两版生效区间相交 | 取到哪版看运气，同一票时高时低 | 先检测重叠，重叠即整份运价集拒绝装载 | `app/modules/m2_rates/version.py` | `tests/test_m2_rates.py` |
 | TRAP-26 | 用旧运价集重新提交 | 旧价覆盖新价，已出账单金额回退 | 运价集版本号比较，低于现有版本直接拒绝 | `app/modules/m2_rates/service.py` | `tests/test_m2_rates.py` |
+| TRAP-27 | 承运商只给含税月结总额，逐票分别取整后汇总差几分钱 | 把差额随手加到某一张账单，客户看到该票金额变化 | 逐票金额不动；尾差 = 控制数 − 逐票合计，单独归属月结层；上界 = 票数 × 0.01 + 0.005 元，超出即判需复核 | `app/modules/m8_settlement/tail.py` | `tests/test_m8_settlement.py` |
+| TRAP-28 | 同一月反复跑月结，每次都补一次尾差 | 差额重复入账，月结总额越补越偏 | 确认即冻结逐票快照与摘要；已确认且票面未变直接跳过，票面变了默认拒绝、需 force 重确认 | `app/modules/m8_settlement/service.py` | `tests/test_m8_settlement.py` |
+| TRAP-29 | 提货时刻用 UTC 直接取年月 | 月初 00:00–08:00（+08:00）的票落到上月 | 先换到 Asia/Shanghai 再取 YYYY-MM | `app/modules/m8_settlement/period.py` | `tests/test_m8_settlement.py` |
 
 ## 对账规则
 
@@ -41,6 +45,11 @@
 - 版本账：可计费运单 = 单选命中 + 无命中或重叠
 - 计费重账：计费行数 = 实重择用 + 体积重择用
 - 重跑：同一份输入得到同一个 run_id，行数与合计不变
+- 月结控制数账：承运商月结合计 = 控制数；逐票合计 + 尾差 = 月结合计；尾差只出现在承运商层，
+  逐票的尾差归属恒为 0
+- 月结尾差上界：`|尾差| ≤ 票数 × 0.01 元 + 0.005 元`（控制数半分），向上取到分；超出即需复核，
+  不可确认。已确认后重跑按冻结快照比对，票面或控制数变动只标「已确认（数据已变）」，
+  不改已确认金额，也不自动重算尾差
 
 ## 已知不覆盖
 

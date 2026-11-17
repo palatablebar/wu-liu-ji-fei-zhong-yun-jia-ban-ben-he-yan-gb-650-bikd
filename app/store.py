@@ -103,6 +103,44 @@ CREATE TABLE IF NOT EXISTS charge_lines (
   codes TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (run_id, waybill_no)
 );
+CREATE TABLE IF NOT EXISTS carrier_controls (
+  month TEXT NOT NULL,
+  carrier TEXT NOT NULL,
+  control_total TEXT NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'CNY',
+  tax_included INTEGER NOT NULL DEFAULT 1,
+  source_name TEXT NOT NULL DEFAULT '',
+  source_sha256 TEXT NOT NULL DEFAULT '',
+  imported_at TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (month, carrier)
+);
+CREATE TABLE IF NOT EXISTS settlements (
+  month TEXT NOT NULL,
+  carrier TEXT NOT NULL,
+  control_total TEXT NOT NULL,
+  billed_total TEXT NOT NULL,
+  bill_count INTEGER NOT NULL DEFAULT 0,
+  tail_amount TEXT NOT NULL DEFAULT '0.00',
+  tail_direction TEXT NOT NULL DEFAULT '无',
+  tail_bound TEXT NOT NULL DEFAULT '0.01',
+  tail_reason TEXT NOT NULL DEFAULT '',
+  settlement_total TEXT NOT NULL DEFAULT '0.00',
+  run_id TEXT NOT NULL DEFAULT '',
+  digest TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'confirmed',
+  confirmed_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (month, carrier)
+);
+CREATE TABLE IF NOT EXISTS settlement_lines (
+  month TEXT NOT NULL,
+  carrier TEXT NOT NULL,
+  waybill_no TEXT NOT NULL,
+  total_amount TEXT NOT NULL,
+  charge_digest TEXT NOT NULL DEFAULT '',
+  confirmed_at TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (month, carrier, waybill_no)
+);
 """
 
 
@@ -332,3 +370,96 @@ def charge_lines(run_id: str) -> list[dict]:
 def latest_run_id() -> str:
     got = one("SELECT run_id FROM runs ORDER BY created_at DESC, run_id DESC LIMIT 1")
     return got["run_id"] if got else ""
+
+
+# --- 月结控制数与已确认月结 ------------------------------------------------
+
+CONTROL_COLUMNS = (
+    "month", "carrier", "control_total", "currency", "tax_included",
+    "source_name", "source_sha256", "imported_at",
+)
+
+
+def replace_controls(month: str, items: list[dict]) -> None:
+    """整月替换：同一月份的控制数一次导入一份，避免旧承运商残留。"""
+    with session() as conn:
+        conn.execute("DELETE FROM carrier_controls WHERE month = ?", (month,))
+        conn.executemany(
+            f"INSERT INTO carrier_controls ({', '.join(CONTROL_COLUMNS)}) "
+            f"VALUES ({', '.join('?' for _ in CONTROL_COLUMNS)})",
+            [tuple(item[c] for c in CONTROL_COLUMNS) for item in items],
+        )
+
+
+def controls_all() -> list[dict]:
+    return rows("SELECT * FROM carrier_controls ORDER BY month DESC, carrier")
+
+
+def settlements_all() -> list[dict]:
+    return rows("SELECT * FROM settlements ORDER BY month DESC, carrier")
+
+
+def controls(month: str) -> list[dict]:
+    return rows(
+        "SELECT * FROM carrier_controls WHERE month = ? ORDER BY carrier", (month,)
+    )
+
+
+def control(month: str, carrier: str) -> dict | None:
+    return one(
+        "SELECT * FROM carrier_controls WHERE month = ? AND carrier = ?",
+        (month, carrier),
+    )
+
+
+SETTLEMENT_COLUMNS = (
+    "month", "carrier", "control_total", "billed_total", "bill_count",
+    "tail_amount", "tail_direction", "tail_bound", "tail_reason",
+    "settlement_total", "run_id", "digest", "status", "confirmed_at", "updated_at",
+)
+
+
+def get_settlement(month: str, carrier: str) -> dict | None:
+    return one(
+        "SELECT * FROM settlements WHERE month = ? AND carrier = ?", (month, carrier)
+    )
+
+
+def settlements(month: str) -> list[dict]:
+    return rows("SELECT * FROM settlements WHERE month = ? ORDER BY carrier", (month,))
+
+
+def settlement_lines(month: str, carrier: str) -> list[dict]:
+    return rows(
+        "SELECT * FROM settlement_lines WHERE month = ? AND carrier = ? "
+        "ORDER BY waybill_no",
+        (month, carrier),
+    )
+
+
+def save_settlement(month: str, carrier: str, header: dict, lines: list[dict]) -> None:
+    """确认落库：表头与逐票快照一次写入，调用方负责先查已确认。"""
+    with session() as conn:
+        conn.execute(
+            "DELETE FROM settlements WHERE month = ? AND carrier = ?", (month, carrier)
+        )
+        conn.execute(
+            f"INSERT INTO settlements ({', '.join(SETTLEMENT_COLUMNS)}) "
+            f"VALUES ({', '.join('?' for _ in SETTLEMENT_COLUMNS)})",
+            tuple(header[c] for c in SETTLEMENT_COLUMNS),
+        )
+        conn.execute(
+            "DELETE FROM settlement_lines WHERE month = ? AND carrier = ?",
+            (month, carrier),
+        )
+        conn.executemany(
+            "INSERT INTO settlement_lines (month, carrier, waybill_no, total_amount, "
+            "charge_digest, confirmed_at) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    month, carrier, line["waybill_no"], line["total_amount"],
+                    line["charge_digest"], line["confirmed_at"],
+                )
+                for line in lines
+            ],
+        )

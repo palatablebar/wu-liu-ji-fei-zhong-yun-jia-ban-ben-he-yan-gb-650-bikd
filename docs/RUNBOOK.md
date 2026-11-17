@@ -38,6 +38,34 @@ curl -s -X POST http://127.0.0.1:18209/api/rates/audit -F sample=rate_cards_over
 
 返回重叠清单；`/api/rates/import` 在校验不通过时返回 409，不会替换现有运价。
 
+## 承运商月结
+
+```bash
+# 1. 导入当月控制数（两列 carrier,control_total；同月整月替换）
+curl -s -X POST http://127.0.0.1:18209/api/settlement/controls \
+  -F month=2026-04 -F sample=carrier_controls_2026-04.csv
+
+# 2. 看逐承运商控制数、逐票合计、尾差与状态
+curl -s "http://127.0.0.1:18209/api/settlement?month=2026-04"
+
+# 3. 确认（可只传某几家：-F carriers=SF,JD）
+curl -s -X POST http://127.0.0.1:18209/api/settlement/confirm -F month=2026-04
+
+# 4. 取月结单与已确认逐票明细
+curl -s -o settlement-2026-04.csv "http://127.0.0.1:18209/api/settlement/statement.csv?month=2026-04"
+curl -s -o settlement-lines-2026-04.csv "http://127.0.0.1:18209/api/settlement/lines.csv?month=2026-04"
+```
+
+样例控制数下：JD 尾差 0.00、SF +0.02、YT −0.02，三家都在上界内，月结合计与控制数相等。
+重复执行确认只会返回 `skipped`，不会重复补差，也不会改动已确认金额。
+
+| 月结现象 | 原因 | 处理 |
+|---|---|---|
+| 状态「需复核」 | 尾差超过票数 × 0.01 + 0.005 元上界 | 核对控制数口径、漏票或运价版本，不要改逐票金额 |
+| 状态「已确认（数据已变）」 | 确认后账单或控制数被重算/替换 | 复核 drift 清单；确需采纳新票面时用 `force=1` 重确认 |
+| 确认返回 409 SETTLEMENT_BLOCKED | 无一家满足确认条件 | 按 detail 里的承运商原因逐条处理 |
+| 状态「缺控制数」 | 该承运商当月没有导入控制数 | 导入控制数后再看月结 |
+
 ## 重建数据库
 
 ```bash

@@ -54,3 +54,19 @@
 
 原因码只在 `app/reasons.py` 定义，分两级：`block` 表示该行不进计费，`info` 表示只做标记。
 每条隔离都带原始行号与原因码，可导出 CSV 复核。
+
+## 月结
+
+| 项 | 类型 | 量化 | 说明 |
+|---|---|---|---|
+| month | 文本 | — | `YYYY-MM`，按提货时刻换算到 Asia/Shanghai 后取年月 |
+| control_total | Decimal | 0.01 元 | 承运商给的含税月结总额，唯一外部口径；按月份整月替换 |
+| billed_total | Decimal | 0.01 元 | 该承运商本月逐票已核金额之和，来自账单，月结不修改 |
+| tail_amount | Decimal | 0.01 元 | `control_total − billed_total`，可为负 |
+| tail_bound | Decimal | 0.01 元 | `ceil(票数 × 0.01 + 0.005)`，尾差是否仍属取整误差的判据 |
+| tail_direction | 文本 | — | 补收（正）/ 冲减（负）/ 无尾差（零） |
+| settlement_total | Decimal | 0.01 元 | `billed_total + tail_amount`，恒等于 `control_total` |
+| digest | 文本 | — | 月结行摘要（16 位），由控制数、逐票金额与逐票摘要求得 |
+
+月结状态：`可确认`、`已确认`、`已确认（数据已变）`、`需复核`、`缺控制数`、`无计费票`。
+只有 `可确认` 与 `已确认` 计入「可导出」；已确认的逐票明细从快照取，不再随账单重算变动。

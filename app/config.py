@@ -101,3 +101,10 @@ SAMPLE_RATES_OVERLAP = "rate_cards_overlap.csv"
 SAMPLE_WAYBILLS = "waybills_dirty.csv"
 SAMPLE_WAYBILLS_GB = "waybills_gb18030.csv"
 SAMPLE_WAYBILLS_TRUNC = "waybills_truncated.csv"
+SAMPLE_CONTROLS = "carrier_controls_2026-04.csv"
+
+# 月结尾差容差：每票单独取整最多差 1 分（截断与四舍五入之间），
+# 控制数自身还有半分取整误差。逐票上界 = 票数 × 0.01 元 + 0.005 元，向上取到分。
+TAIL_PER_BILL = Decimal("0.01")
+TAIL_CONTROL_HALF = Decimal("0.005")
+SETTLEMENT_CURRENCY = "CNY"

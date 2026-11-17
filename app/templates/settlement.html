@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}月结{% endblock %}
+{% block body %}
+<section class="head">
+  <h1>承运商月结</h1>
+  <p class="meta">
+    月份 {{ month or "—" }} ·
+    控制数 {{ report.totals.control_total|money if report.totals else "0.00" }} 元 ·
+    逐票合计 {{ report.totals.billed_total|money if report.totals else "0.00" }} 元 ·
+    尾差 {{ report.totals.tail_total|money if report.totals else "0.00" }} 元 ·
+    {{ "可确认" if report.ready else "未就绪" }} · 已确认 {{ report.confirmed or 0 }}/{{ report.carriers|length if report.carriers else 0 }} 家
+  </p>
+</section>
+
+<div class="rule-line">{{ rule(200) }}</div>
+
+<section class="block">
+  <h2>月份与控制数</h2>
+  <form class="cmd" method="get" action="/settlement">
+    <label class="field"><span>月份</span>
+      <select name="month">
+        {% for item in months %}
+        <option value="{{ item }}" {{ "selected" if item == month }}>{{ item }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="btn">查看</button>
+  </form>
+  <form class="cmd" data-post="/api/settlement/controls" data-target="#controls-out" data-reload="1">
+    <label class="field"><span>月份</span><input name="month" value="{{ month }}" size="8"></label>
+    <label class="field"><span>样例</span>
+      <select name="sample">
+        <option value="carrier_controls_2026-04.csv">carrier_controls_2026-04.csv</option>
+      </select>
+    </label>
+    <label class="field"><span>文件</span><input type="file" name="file" accept=".csv"></label>
+    <button type="submit" class="btn">导入控制数</button>
+    <span class="dim">两列 carrier,control_total；按月份整月替换</span>
+  </form>
+  <pre id="controls-out" class="out">待导入</pre>
+</section>
+
+<div class="rule-line">{{ rule(200) }}</div>
+
+{% if report.carriers %}
+<section class="block">
+  <h2>逐承运商对账</h2>
+  <p class="meta">
+    逐票已核金额来自账单，月结不改动任何一票；尾差 = 控制数 − 逐票合计，单独归属月结层。
+    上界 = 票数 × 0.01 元 + 0.005 元（控制数半分），向上取到分；超出上界需复核，不可确认。
+  </p>
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>承运商</th><th class="num">票数</th>
+        <th class="num">逐票合计</th><th class="num">控制数</th>
+        <th class="num">尾差</th><th>方向</th><th class="num">尾差上界</th>
+        <th class="num">月结合计</th><th>票面</th><th>状态</th><th class="num">摘要</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in report.carriers %}
+      <tr class="{{ 'flag-bad' if item.status in (statuses.review, statuses.drift) }}">
+        <td>{{ item.carrier }}</td>
+        <td class="num">{{ item.bill_count }}</td>
+        <td class="num">{{ item.billed_total|money }}</td>
+        <td class="num">{{ item.control_total|money if item.control_total else "—" }}</td>
+        <td class="num strong">{{ item.tail_amount|money if item.tail_amount else "—" }}</td>
+        <td>{{ item.tail_direction }}</td>
+        <td class="num">{{ item.tail_bound|money }}</td>
+        <td class="num strong">{{ item.settlement_total|money if item.settlement_total else "—" }}</td>
+        <td class="mono dim">{{ "冻结" if item.frozen else "实时" }}</td>
+        <td>{{ item.status }}</td>
+        <td class="mono dim">{{ item.digest or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% for item in report.carriers %}
+  <section class="block">
+    <h3>{{ item.carrier }} · {{ item.status }}</h3>
+    <p class="meta">{{ item.tail_reason }}</p>
+    {% if item.drift %}
+    <p class="meta mono flag-bad">票面变动：{{ item.drift|join("；") }}</p>
+    {% endif %}
+    {% if item.status == statuses.ready %}
+    <form class="cmd" data-post="/api/settlement/confirm" data-target="#confirm-out" data-reload="1">
+      <input type="hidden" name="month" value="{{ month }}">
+      <input type="hidden" name="carriers" value="{{ item.carrier }}">
+      <button type="submit" class="btn">确认 {{ item.carrier }} 月结</button>
+      <span class="dim">确认后逐票金额冻结，重跑不重复补差</span>
+    </form>
+    {% elif item.status == statuses.drift %}
+    <form class="cmd" data-post="/api/settlement/confirm" data-target="#confirm-out" data-reload="1">
+      <input type="hidden" name="month" value="{{ month }}">
+      <input type="hidden" name="carriers" value="{{ item.carrier }}">
+      <input type="hidden" name="force" value="1">
+      <button type="submit" class="btn">复核后用当前票面重确认 {{ item.carrier }}</button>
+      <span class="dim">旧摘要会留在确认输出里</span>
+    </form>
+    {% endif %}
+    {% if item.lines %}
+    <table class="grid">
+      <thead><tr><th>运单号</th><th>提货（本地）</th><th>版本</th><th class="num">已核金额</th><th class="num">尾差归属</th></tr></thead>
+      <tbody>
+        {% for line in item.lines %}
+        <tr>
+          <td class="mono">{{ line.waybill_no }}</td>
+          <td class="mono">{{ line.pickup_local }}</td>
+          <td class="mono dim">{{ line.version_id }}</td>
+          <td class="num">{{ line.total_amount|money }}</td>
+          <td class="num dim">0.00</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </section>
+  {% endfor %}
+
+  <form class="cmd" data-post="/api/settlement/confirm" data-target="#confirm-out" data-reload="1">
+    <input type="hidden" name="month" value="{{ month }}">
+    <button type="submit" class="btn">确认本月全部可确认承运商</button>
+    <span class="dim">已确认且票面未变的会跳过，不会重复补差</span>
+  </form>
+  <pre id="confirm-out" class="out">待确认</pre>
+</section>
+{% else %}
+<p class="empty">该月份还没有控制数或账单。</p>
+{% endif %}
+
+<div class="rule-line">{{ rule(200) }}</div>
+
+<section class="block">
+  <h2>已确认月结单</h2>
+  {% if statement %}
+  <table class="grid">
+    <thead>
+      <tr><th>承运商</th><th class="num">票数</th><th class="num">逐票合计</th>
+        <th class="num">控制数</th><th class="num">尾差</th><th>方向</th>
+        <th class="num">月结合计</th><th>确认时间</th><th>摘要</th></tr>
+    </thead>
+    <tbody>
+      {% for row in statement %}
+      <tr>
+        <td>{{ row.carrier }}</td>
+        <td class="num">{{ row.bill_count }}</td>
+        <td class="num">{{ row.billed_total|money }}</td>
+        <td class="num">{{ row.control_total|money }}</td>
+        <td class="num">{{ row.tail_amount|money }}</td>
+        <td>{{ row.tail_direction }}</td>
+        <td class="num strong">{{ row.settlement_total|money }}</td>
+        <td class="mono">{{ row.confirmed_at|local }}</td>
+        <td class="mono dim">{{ row.digest }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="meta">
+    {% if exportable %}
+    <a href="/api/settlement/statement.csv?month={{ month }}">月结单 CSV</a> ·
+    <a href="/api/settlement/lines.csv?month={{ month }}">已确认逐票明细 CSV</a>
+    {% else %}
+    <span class="dim">控制数覆盖的承运商尚未全部确认，导出暂不可用。</span>
+    {% endif %}
+  </p>
+  {% else %}
+  <p class="empty">本月还没有确认过的月结。</p>
+  {% endif %}
+</section>
+{% endblock %}
